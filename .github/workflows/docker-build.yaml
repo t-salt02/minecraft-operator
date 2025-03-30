@@ -32,7 +32,7 @@ jobs:
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           tags: ghcr.io/t-salt02/minecraft-operator:dev-latest
 
       - name: Build and Push (master)
@@ -41,7 +41,7 @@ jobs:
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           tags: ghcr.io/t-salt02/minecraft-operator:latest
 
       - name: Build and Push (tag)
@@ -50,7 +50,7 @@ jobs:
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           tags: ghcr.io/t-salt02/minecraft-operator:${{ github.ref_name }}
 
   build-only-pr:
@@ -66,4 +66,4 @@ jobs:
         with:
           context: .
           push: false
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
