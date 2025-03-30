@@ -5,27 +5,65 @@ on:
     branches:
       - master
       - dev
+    tags:
+      - v*
   pull_request:
     branches:
       - dev
   workflow_dispatch:
 
 jobs:
-  build:
+  build-and-push:
+    if: github.event_name == 'push'
     runs-on: ubuntu-22.04
-
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-qemu@v3
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v5
+
+      - name: Build and Push (dev)
+        if: github.ref_name == 'dev'
+        uses: docker/build-push-action@v5
         with:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: ghcr.io/t-salt02/${{ github.repository }}:${{ github.ref_name }}
+          tags: ghcr.io/t-salt02/minecraft-operator:dev-latest
+
+      - name: Build and Push (master)
+        if: github.ref_name == 'master'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ghcr.io/t-salt02/minecraft-operator:latest
+
+      - name: Build and Push (tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ghcr.io/t-salt02/minecraft-operator:${{ github.ref_name }}
+
+  build-only-pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build only (PR - no push)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          platforms: linux/amd64,linux/arm64
