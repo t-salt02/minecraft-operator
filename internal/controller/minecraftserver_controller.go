@@ -67,168 +67,172 @@ func (r *MinecraftServerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	var mc minecraftv1alpha1.MinecraftServer
 	if err := r.Get(ctx, req.NamespacedName, &mc); err != nil {
-		logger.Info("Unable to fetch MinecraftServer's CR", "fetchError", err)
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if errors.IsNotFound(err) {
+			logger.Info("MinecraftServer resource not found.")
+			return ctrl.Result{}, nil
+		}
+		logger.Error(err, "Unable to fetch MinecraftServer's CR", "fetchError", mc.Name)
+		return ctrl.Result{}, err
 	}
 
 	headlessSvcName := mc.Name + "-headless"
-	var svc corev1.Service
-	err := r.Get(ctx, types.NamespacedName{Name: headlessSvcName, Namespace: mc.Namespace}, &svc)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			logger.Info("Headless service not found, creating a new one", "service", headlessSvcName)
-			// definetion of headless service
-			svc = corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      headlessSvcName,
-					Namespace: mc.Namespace,
-					Labels:    map[string]string{"app": mc.Name},
-					Annotations: map[string]string{
-						"tailscale.com/expose":   "true",
-						"tailscale.com/hostname": mc.Spec.ServerName,
-					},
-				},
-				Spec: corev1.ServiceSpec{
-					Ports: []corev1.ServicePort{
-						{
-							Port:       25565,
-							Protocol:   corev1.ProtocolTCP,
-							TargetPort: intstr.FromString("minecraft"),
-						},
-					},
-					ClusterIP: "None",
-					Selector:  map[string]string{"app": mc.Name},
-				},
-			}
-			if err := ctrl.SetControllerReference(&mc, &svc, r.Scheme); err != nil {
-				return ctrl.Result{}, err
-			}
-			if err := r.Create(ctx, &svc); err != nil {
-				logger.Error(err, "Unable to create headless service")
-				return ctrl.Result{}, err
-			}
-			logger.Info("Created headless service", "service", svc.Name)
-		} else {
-			logger.Error(err, "Unable to fetch headless service")
-			return ctrl.Result{}, err
-		}
-	} else {
-		logger.Info("Headless service already exists", "service", svc.Name)
+	svc := corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      headlessSvcName,
+			Namespace: mc.Namespace,
+		},
 	}
 
-	// Create or update the StatefulSet
-	var sts appsv1.StatefulSet
-	if err := r.Get(ctx, types.NamespacedName{Name: mc.Name, Namespace: mc.Namespace}, &sts); err != nil {
-		if errors.IsNotFound(err) {
-			logger.Info("StatefulSet not found, creating a new one", "statefulset", mc.Name)
-			sts = appsv1.StatefulSet{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      mc.Name,
-					Namespace: mc.Namespace,
-					Labels:    map[string]string{"app": mc.Name},
-				},
-				Spec: appsv1.StatefulSetSpec{
-					Replicas:    ptr.To(int32(1)),
-					ServiceName: headlessSvcName,
-					Selector: &metav1.LabelSelector{
-						MatchLabels: map[string]string{"app": mc.Name},
-					},
-					Template: corev1.PodTemplateSpec{
-						ObjectMeta: metav1.ObjectMeta{
-							Labels: map[string]string{"app": mc.Name},
-						},
-						Spec: corev1.PodSpec{
-							Containers: []corev1.Container{
-								{
-									Name:  mc.Name,
-									Image: "itzg/minecraft-server",
-									Env: []corev1.EnvVar{
-										{Name: "EULA", Value: "TRUE"},
-										{Name: "DIFFICULTY", Value: mc.Spec.Difficulty},
-										{Name: "SEED", Value: mc.Spec.Seed},
-										{Name: "HARDCORE", Value: strconv.FormatBool(mc.Spec.Hardcore)},
-										{Name: "SERVER_NAME", Value: mc.Spec.ServerName},
-										{Name: "VERSION", Value: mc.Spec.Version},
-										{Name: "MEMORY", Value: "4G"},
-									},
-									Ports: []corev1.ContainerPort{
-										{
-											ContainerPort: 25565,
-											Name:          "minecraft",
-											Protocol:      corev1.ProtocolTCP,
-										},
-									},
-									Resources: corev1.ResourceRequirements{
-										Requests: corev1.ResourceList{
-											corev1.ResourceCPU:    resource.MustParse("500m"),
-											corev1.ResourceMemory: resource.MustParse("4Gi"),
-										},
-										Limits: corev1.ResourceList{
-											corev1.ResourceCPU:    resource.MustParse("2000m"),
-											corev1.ResourceMemory: resource.MustParse("4Gi"),
-										},
-									},
-								},
-							},
-						},
-					},
-					VolumeClaimTemplates: []corev1.PersistentVolumeClaim{
-						{
-							ObjectMeta: metav1.ObjectMeta{
-								Name:   mc.Name,
-								Labels: map[string]string{"app": mc.Name},
-							},
-							Spec: corev1.PersistentVolumeClaimSpec{
-								AccessModes: []corev1.PersistentVolumeAccessMode{
-									corev1.ReadWriteOnce,
-								},
-								Resources: corev1.VolumeResourceRequirements{
-									Requests: corev1.ResourceList{
-										corev1.ResourceStorage: resource.MustParse(mc.Spec.Storage),
-									},
-								},
-								StorageClassName: ptr.To("topolvm-provisioner"),
-							},
-						},
-					},
-				},
-			}
-			if err := ctrl.SetControllerReference(&mc, &sts, r.Scheme); err != nil {
-				return ctrl.Result{}, err
-			}
-			if err := r.Create(ctx, &sts); err != nil {
-				logger.Error(err, "Unable to create StatefulSet")
-				return ctrl.Result{}, err
-			}
-			logger.Info("Created StatefulSet", "statefulset", sts.Name)
-		} else {
-			return ctrl.Result{}, err
+	_, err := ctrl.CreateOrUpdate(ctx, r.Client, &svc, func() error {
+		svc.SetLabels(map[string]string{"app": mc.Name})
+		svc.SetAnnotations(map[string]string{
+			"tailscale.com/expose":   "true",
+			"tailscale.com/hostname": mc.Spec.ServerName,
+		})
+		svc.Spec.Ports = []corev1.ServicePort{
+			{
+				Port:       25565,
+				Protocol:   corev1.ProtocolTCP,
+				TargetPort: intstr.FromString("minecraft"),
+			},
 		}
+		svc.Spec.ClusterIP = "None"
+		svc.Spec.Selector = map[string]string{"app": mc.Name}
+		return ctrl.SetControllerReference(&mc, &svc, r.Scheme)
+	})
+	if err != nil {
+		logger.Error(err, "Unable to create or update headless service")
+		return ctrl.Result{}, err
 	}
-	// update statefulset status
+	logger.Info("Headless service created or updated", "service", svc.Name)
+
+	// Create or update the StatefulSet
+	sts := appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      mc.Name,
+			Namespace: mc.Namespace,
+		},
+	}
+
+	_, err = ctrl.CreateOrUpdate(ctx, r.Client, &sts, func() error {
+		sts.SetLabels(map[string]string{"app": mc.Name})
+		sts.Spec.Replicas = ptr.To(int32(1))
+		sts.Spec.ServiceName = headlessSvcName
+		sts.Spec.Selector = &metav1.LabelSelector{
+			MatchLabels: map[string]string{"app": mc.Name},
+		}
+		sts.Spec.Template.ObjectMeta.Labels = map[string]string{"app": mc.Name}
+		sts.Spec.Template.Spec.Containers = []corev1.Container{
+			{
+				Name:  mc.Name,
+				Image: "itzg/minecraft-server",
+				Env: []corev1.EnvVar{
+					{Name: "EULA", Value: "TRUE"},
+					{Name: "DIFFICULTY", Value: mc.Spec.Difficulty},
+					{Name: "SEED", Value: mc.Spec.Seed},
+					{Name: "HARDCORE", Value: strconv.FormatBool(mc.Spec.Hardcore)},
+					{Name: "SERVER_NAME", Value: mc.Spec.ServerName},
+					{Name: "VERSION", Value: mc.Spec.Version},
+					{Name: "MEMORY", Value: "4G"},
+				},
+				Ports: []corev1.ContainerPort{
+					{
+						ContainerPort: 25565,
+						Name:          "minecraft",
+						Protocol:      corev1.ProtocolTCP,
+					},
+				},
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceMemory: resource.MustParse("4Gi"),
+					},
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("2000m"),
+						corev1.ResourceMemory: resource.MustParse("4Gi"),
+					},
+				},
+			},
+		}
+		sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   mc.Name,
+					Labels: map[string]string{"app": mc.Name},
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{
+					AccessModes: []corev1.PersistentVolumeAccessMode{
+						corev1.ReadWriteOnce,
+					},
+					Resources: corev1.VolumeResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceStorage: resource.MustParse(mc.Spec.Storage),
+						},
+					},
+					StorageClassName: ptr.To("topolvm-provisioner"),
+				},
+			},
+		}
+		return ctrl.SetControllerReference(&mc, &sts, r.Scheme)
+	})
+	if err != nil {
+		logger.Error(err, "Unable to create or update StatefulSet")
+		return ctrl.Result{}, err
+	}
+	logger.Info("StatefulSet created or updated", "statefulset", sts.Name)
+
+	//update statefulset status
 	var podList corev1.PodList
 	if err := r.List(ctx, &podList, client.InNamespace(mc.Namespace), client.MatchingLabels{"app": mc.Name}); err != nil {
-		logger.Error(err, "Unable to list pods")
-		return ctrl.Result{}, err
+		logger.Error(err, "Unable to list pods for statefulSet", "statefulset", mc.Name)
+		mc.Status.Ready = false
+		mc.Status.IP = ""
+		if err := r.Status().Update(ctx, &mc); err != nil {
+			logger.Error(err, "Unable to update MinecraftServer status", "updateError", err)
+			return ctrl.Result{}, err
+		}
 	}
 	if len(podList.Items) == 0 {
 		logger.Info("No pods found for StatefulSet", "statefulset", mc.Name)
 		mc.Status.Ready = false
 		mc.Status.IP = ""
-	} else {
-		pod := podList.Items[0]
-		mc.Status.Ready = len(pod.Status.ContainerStatuses) > 0 && pod.Status.ContainerStatuses[0].Ready
-		if mc.Status.Ready {
-			mc.Status.IP = pod.Status.PodIP
-		} else {
-			mc.Status.IP = ""
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		if err := r.Status().Update(ctx, &mc); err != nil {
+			logger.Error(err, "Unable to update MinecraftServer status", "updateError", err)
 		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
-	// update status
+
+	// Check if the pod is ready
+	pod := podList.Items[0]
+	isPodReady := false
+	if len(pod.Status.ContainerStatuses) > 0 && pod.Status.ContainerStatuses[0].Ready {
+		isPodReady = true
+	}
+
+	// Check if the service is created
+	isServiceReady := false
+	if err := r.Get(ctx, types.NamespacedName{Name: svc.Name, Namespace: svc.Namespace}, &svc); err != nil {
+		if errors.IsNotFound(err) {
+			logger.Info("Service not found", "service", svc.Name)
+		} else {
+			logger.Error(err, "Unable to fetch service", "service", svc.Name)
+		}
+	} else {
+		isServiceReady = true
+	}
+
+	if isPodReady && isServiceReady {
+		mc.Status.Ready = true
+		mc.Status.IP = pod.Status.PodIP
+	} else {
+		mc.Status.Ready = false
+		mc.Status.IP = ""
+	}
+
 	if err := r.Status().Update(ctx, &mc); err != nil {
-		return ctrl.Result{}, err
+		logger.Error(err, "Unable to update MinecraftServer status", "updateError", err)
 	}
+
 	return ctrl.Result{}, nil
 }
 
