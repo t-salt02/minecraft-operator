@@ -75,36 +75,33 @@ func (r *MinecraftServerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	headlessSvcName := mc.Name + "-headless"
 	svc := corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      headlessSvcName,
+			Name:      mc.Name,
 			Namespace: mc.Namespace,
 		},
 	}
 
 	_, err := ctrl.CreateOrUpdate(ctx, r.Client, &svc, func() error {
 		svc.SetLabels(map[string]string{"app": mc.Name})
-		svc.SetAnnotations(map[string]string{
-			"tailscale.com/expose":   "true",
-			"tailscale.com/hostname": mc.Spec.ServerName,
-		})
+		svc.Spec.Selector = map[string]string{"app": mc.Name}
+		svc.Spec.Type = corev1.ServiceTypeLoadBalancer
+		svc.Spec.LoadBalancerClass = ptr.To("tailscale")
 		svc.Spec.Ports = []corev1.ServicePort{
 			{
+				Name:       "minecraft",
 				Port:       25565,
+				TargetPort: intstr.FromInt(25565),
 				Protocol:   corev1.ProtocolTCP,
-				TargetPort: intstr.FromString("minecraft"),
 			},
 		}
-		svc.Spec.ClusterIP = "None"
-		svc.Spec.Selector = map[string]string{"app": mc.Name}
 		return ctrl.SetControllerReference(&mc, &svc, r.Scheme)
 	})
 	if err != nil {
-		logger.Error(err, "Unable to create or update headless service")
+		logger.Error(err, "Unable to create or update Service")
 		return ctrl.Result{}, err
 	}
-	logger.Info("Headless service created or updated", "service", svc.Name)
+	logger.Info("Service created or updated", "service", svc.Name)
 
 	// Create or update the StatefulSet
 	sts := appsv1.StatefulSet{
