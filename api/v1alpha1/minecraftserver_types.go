@@ -45,9 +45,6 @@ type MinecraftServerSpec struct {
 }
 
 // MinecraftServerStatus defines the observed state of MinecraftServer.
-// +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=".status.ready",description="Pod readiness"
-// +kubebuilder:printcolumn:name="IP",type=string,JSONPath=".status.ip",description="Server IP address"
-// +kubebuilder:printcolumn:name="Version",type=string,JSONPath=".spec.version",description="Minecraft version"
 type MinecraftServerStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
@@ -57,8 +54,10 @@ type MinecraftServerStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-
 // MinecraftServer is the Schema for the minecraftservers API.
+// +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=".status.ready",description="Pod readiness"
+// +kubebuilder:printcolumn:name="IP",type=string,JSONPath=".status.ip",description="Server IP address"
+// +kubebuilder:printcolumn:name="Version",type=string,JSONPath=".spec.version",description="Minecraft version"
 type MinecraftServer struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
