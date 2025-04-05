@@ -45,12 +45,12 @@ type MinecraftServerSpec struct {
 }
 
 // MinecraftServerStatus defines the observed state of MinecraftServer.
+// +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=".status.ready",description="Pod readiness"
+// +kubebuilder:printcolumn:name="IP",type=string,JSONPath=".status.ip",description="Server IP address"
+// +kubebuilder:printcolumn:name="Version",type=string,JSONPath=".spec.version",description="Minecraft version"
 type MinecraftServerStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
-	// +kubebuilder:printcolumn:name="Ready",type=boolean,JSONPath=".status.ready",description="Pod readiness"
-	// +kubebuilder:printcolumn:name="IP",type=string,JSONPath=".status.ip",description="Server IP address"
-	// +kubebuilder:printcolumn:name="Version",type=string,JSONPath=".spec.version",description="Minecraft version"
 	Ready bool   `json:"ready,omitempty"`
 	IP    string `json:"ip,omitempty"`
 }
