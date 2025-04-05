@@ -14,7 +14,20 @@ spec:
     singular: minecraftserver
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - description: Pod readiness
+      jsonPath: .status.ready
+      name: Ready
+      type: boolean
+    - description: Server IP address
+      jsonPath: .status.ip
+      name: IP
+      type: string
+    - description: Minecraft version
+      jsonPath: .spec.version
+      name: Version
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: MinecraftServer is the Schema for the minecraftservers API.
