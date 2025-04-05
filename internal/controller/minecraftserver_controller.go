@@ -114,7 +114,7 @@ func (r *MinecraftServerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	_, err = ctrl.CreateOrUpdate(ctx, r.Client, &sts, func() error {
 		sts.SetLabels(map[string]string{"app": mc.Name})
 		sts.Spec.Replicas = ptr.To(int32(1))
-		sts.Spec.ServiceName = headlessSvcName
+		sts.Spec.ServiceName = mc.Name
 		sts.Spec.Selector = &metav1.LabelSelector{
 			MatchLabels: map[string]string{"app": mc.Name},
 		}
