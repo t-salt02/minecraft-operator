@@ -75,6 +75,11 @@ func (r *MinecraftServerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
+	if !mc.ObjectMeta.DeletionTimestamp.IsZero() {
+		logger.Info("Deletion in progress, skip reconcile")
+		return ctrl.Result{}, nil
+	}
+
 	svc := corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      mc.Name,
