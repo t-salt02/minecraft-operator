@@ -142,11 +142,17 @@ func (r *MinecraftServerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				Resources: corev1.ResourceRequirements{
 					Requests: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("500m"),
-						corev1.ResourceMemory: resource.MustParse("4Gi"),
+						corev1.ResourceMemory: resource.MustParse("5Gi"),
 					},
 					Limits: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("2000m"),
-						corev1.ResourceMemory: resource.MustParse("4Gi"),
+						corev1.ResourceMemory: resource.MustParse("5Gi"),
+					},
+				},
+				VolumeMounts: []corev1.VolumeMount{
+					{
+						Name:      mc.Name,
+						MountPath: "/data",
 					},
 				},
 			},
