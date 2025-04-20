@@ -264,10 +264,10 @@ func (r *MinecraftServerReconciler) checkServiceReady(ctx context.Context, svc *
 
 func getTailscaleIP(svc *corev1.Service) string {
 	IP := svc.Status.LoadBalancer.Ingress
-	if len(IP) >= 2 {
-		return IP[1].Hostname
+	if len(IP) == 0 {
+		return "No endpoint"
 	}
-	return ""
+	return IP[0].IP
 }
 
 func (r *MinecraftServerReconciler) checkStatefulsetReady(ctx context.Context, mc *minecraftv1alpha1.MinecraftServer) bool {
