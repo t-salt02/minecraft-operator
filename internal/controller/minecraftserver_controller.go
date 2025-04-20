@@ -65,8 +65,11 @@ func (r *MinecraftServerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	logger := logf.FromContext(ctx)
 	logger.Info("Reconciling MinecraftServer")
 
-	var mc minecraftv1alpha1.MinecraftServer
-	if err := r.Get(ctx, req.NamespacedName, &mc); err != nil {
+	mc := &minecraftv1alpha1.MinecraftServer{}
+	svc := &corev1.Service{}
+	var err error
+
+	if err := r.Get(ctx, req.NamespacedName, mc); err != nil {
 		if errors.IsNotFound(err) {
 			logger.Info("MinecraftServer resource not found.")
 			return ctrl.Result{}, nil
@@ -80,14 +83,42 @@ func (r *MinecraftServerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, nil
 	}
 
-	svc := corev1.Service{
+	// Create or update the Service
+	if svc, err = r.createOrUpdateService(ctx, mc); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Create or update the StatefulSet
+	if _, err = r.createOrUpdateStatefulSet(ctx, mc); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	return r.updateStatus(ctx, mc, svc)
+}
+
+// SetupWithManager sets up the controller with the Manager.
+func (r *MinecraftServerReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&minecraftv1alpha1.MinecraftServer{}).
+		Owns(&appsv1.StatefulSet{}).
+		Owns(&corev1.Service{}).
+		Owns(&corev1.Pod{}).
+		Named("minecraftserver").
+		Complete(r)
+}
+
+func (r *MinecraftServerReconciler) createOrUpdateService(ctx context.Context, mc *minecraftv1alpha1.MinecraftServer) (*corev1.Service, error) {
+	logger := logf.FromContext(ctx)
+	logger.Info("Creating or updating Service")
+
+	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      mc.Name,
 			Namespace: mc.Namespace,
 		},
 	}
 
-	_, err := ctrl.CreateOrUpdate(ctx, r.Client, &svc, func() error {
+	_, err := ctrl.CreateOrUpdate(ctx, r.Client, svc, func() error {
 		svc.SetLabels(map[string]string{"app": mc.Name})
 		svc.Spec.Selector = map[string]string{"app": mc.Name}
 		svc.Spec.Type = corev1.ServiceTypeLoadBalancer
@@ -100,23 +131,29 @@ func (r *MinecraftServerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				Protocol:   corev1.ProtocolTCP,
 			},
 		}
-		return ctrl.SetControllerReference(&mc, &svc, r.Scheme)
+		return ctrl.SetControllerReference(mc, svc, r.Scheme)
 	})
 	if err != nil {
 		logger.Error(err, "Unable to create or update Service")
-		return ctrl.Result{}, err
+		return nil, err
 	}
 	logger.Info("Service created or updated", "service", svc.Name)
 
-	// Create or update the StatefulSet
-	sts := appsv1.StatefulSet{
+	return svc, nil
+}
+
+func (r *MinecraftServerReconciler) createOrUpdateStatefulSet(ctx context.Context, mc *minecraftv1alpha1.MinecraftServer) (*appsv1.StatefulSet, error) {
+	logger := logf.FromContext(ctx)
+	logger.Info("Creating or updating StatefulSet", "statefulset", mc.Name)
+
+	sts := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      mc.Name,
 			Namespace: mc.Namespace,
 		},
 	}
 
-	_, err = ctrl.CreateOrUpdate(ctx, r.Client, &sts, func() error {
+	_, err := ctrl.CreateOrUpdate(ctx, r.Client, sts, func() error {
 		sts.SetLabels(map[string]string{"app": mc.Name})
 		sts.Spec.Replicas = ptr.To(int32(1))
 		sts.Spec.ServiceName = mc.Name
@@ -139,25 +176,19 @@ func (r *MinecraftServerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				},
 				Ports: []corev1.ContainerPort{
 					{
-						ContainerPort: 25565,
 						Name:          "minecraft",
+						ContainerPort: 25565,
 						Protocol:      corev1.ProtocolTCP,
 					},
 				},
 				Resources: corev1.ResourceRequirements{
-					Requests: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("500m"),
-						corev1.ResourceMemory: resource.MustParse("5Gi"),
-					},
 					Limits: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("2000m"),
 						corev1.ResourceMemory: resource.MustParse("5Gi"),
 					},
-				},
-				VolumeMounts: []corev1.VolumeMount{
-					{
-						Name:      mc.Name,
-						MountPath: "/data",
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceMemory: resource.MustParse("5Gi"),
 					},
 				},
 			},
@@ -181,76 +212,85 @@ func (r *MinecraftServerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				},
 			},
 		}
-		return ctrl.SetControllerReference(&mc, &sts, r.Scheme)
+		return ctrl.SetControllerReference(mc, sts, r.Scheme)
 	})
 	if err != nil {
 		logger.Error(err, "Unable to create or update StatefulSet")
-		return ctrl.Result{}, err
+		return nil, err
 	}
 	logger.Info("StatefulSet created or updated", "statefulset", sts.Name)
+	return sts, nil
+}
 
-	//update statefulset status
-	var podList corev1.PodList
-	if err := r.List(ctx, &podList, client.InNamespace(mc.Namespace), client.MatchingLabels{"app": mc.Name}); err != nil {
-		logger.Error(err, "Unable to list pods for statefulSet", "statefulset", mc.Name)
-		mc.Status.Ready = false
-		mc.Status.IP = ""
-		if err := r.Status().Update(ctx, &mc); err != nil {
-			logger.Error(err, "Unable to update MinecraftServer status", "updateError", err)
-			return ctrl.Result{}, err
+func (r *MinecraftServerReconciler) updateStatus(ctx context.Context, mc *minecraftv1alpha1.MinecraftServer, svc *corev1.Service) (ctrl.Result, error) {
+	const requeueDelay = 10 * time.Second
+	logger := logf.FromContext(ctx)
+	logger.Info("Updating MinecraftServer status", "Status", mc.Name)
+
+	// Check if the service is created
+	isServiceReady, hostName := r.checkServiceReady(ctx, svc)
+	// Check if the StatefulSet is created
+	isStatefulSetReady := r.checkStatefulsetReady(ctx, mc)
+	mc.Status.IP = hostName
+	ready := isServiceReady && isStatefulSetReady
+	mc.Status.Ready = ready
+
+	if err := r.Status().Update(ctx, mc); err != nil {
+		logger.Error(err, "Unable to update MinecraftServer status", "updateError", err)
+		return ctrl.Result{}, err
+	}
+
+	if !ready {
+		logger.Info("MinecraftServer is not ready, requeuing", "requeueDelay", mc.Name)
+		return ctrl.Result{RequeueAfter: requeueDelay}, nil
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *MinecraftServerReconciler) checkServiceReady(ctx context.Context, svc *corev1.Service) (bool, string) {
+	logger := logf.FromContext(ctx)
+	isServiceReady := true
+	if err := r.Get(ctx, types.NamespacedName{Name: svc.Name, Namespace: svc.Namespace}, svc); err != nil {
+		if errors.IsNotFound(err) {
+			logger.Info("Service not found", "service", svc.Name)
+			isServiceReady = false
+		} else {
+			logger.Error(err, "Unable to fetch service", "service", svc.Name)
+			isServiceReady = false
 		}
 	}
+	return isServiceReady, getTailscaleIP(svc)
+}
+
+func getTailscaleIP(svc *corev1.Service) string {
+	IP := svc.Status.LoadBalancer.Ingress
+	if len(IP) >= 2 {
+		return IP[1].Hostname
+	}
+	return ""
+}
+
+func (r *MinecraftServerReconciler) checkStatefulsetReady(ctx context.Context, mc *minecraftv1alpha1.MinecraftServer) bool {
+	logger := logf.FromContext(ctx)
+	podList := &corev1.PodList{}
+	isStatefulSetReady := true
+
+	if err := r.List(ctx, podList, client.InNamespace(mc.Namespace), client.MatchingLabels{"app": mc.Name}); err != nil {
+		logger.Error(err, "Unable to list pods for statefulSet", "statefulset", mc.Name)
+		isStatefulSetReady = false
+		return isStatefulSetReady
+	}
+
 	if len(podList.Items) == 0 {
 		logger.Info("No pods found for StatefulSet", "statefulset", mc.Name)
-		mc.Status.Ready = false
-		mc.Status.IP = ""
-		if err := r.Status().Update(ctx, &mc); err != nil {
-			logger.Error(err, "Unable to update MinecraftServer status", "updateError", err)
-		}
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		isStatefulSetReady = false
+		return isStatefulSetReady
 	}
 
 	// Check if the pod is ready
 	pod := podList.Items[0]
-	isPodReady := false
 	if len(pod.Status.ContainerStatuses) > 0 && pod.Status.ContainerStatuses[0].Ready {
-		isPodReady = true
+		isStatefulSetReady = true
 	}
-
-	// Check if the service is created
-	isServiceReady := false
-	if err := r.Get(ctx, types.NamespacedName{Name: svc.Name, Namespace: svc.Namespace}, &svc); err != nil {
-		if errors.IsNotFound(err) {
-			logger.Info("Service not found", "service", svc.Name)
-		} else {
-			logger.Error(err, "Unable to fetch service", "service", svc.Name)
-		}
-	} else {
-		isServiceReady = true
-	}
-
-	if isPodReady && isServiceReady {
-		mc.Status.Ready = true
-		mc.Status.IP = pod.Status.PodIP
-	} else {
-		mc.Status.Ready = false
-		mc.Status.IP = ""
-	}
-
-	if err := r.Status().Update(ctx, &mc); err != nil {
-		logger.Error(err, "Unable to update MinecraftServer status", "updateError", err)
-	}
-
-	return ctrl.Result{}, nil
-}
-
-// SetupWithManager sets up the controller with the Manager.
-func (r *MinecraftServerReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&minecraftv1alpha1.MinecraftServer{}).
-		Owns(&appsv1.StatefulSet{}).
-		Owns(&corev1.Service{}).
-		Owns(&corev1.Pod{}).
-		Named("minecraftserver").
-		Complete(r)
+	return isStatefulSetReady
 }
